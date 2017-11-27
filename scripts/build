@@ -1,0 +1,125 @@
+#!/bin/bash
+
+cd "$(dirname "$0")/.."
+
+CWD=$(pwd -P)
+SRCPATH="${CWD}/src"
+INSTALLPATH="${CWD}/root"
+
+CROSS_COMPILE="gcc-linaro-6.4.1-2017.11-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-"
+
+ZLIB_VER="1.2.11"
+LZO_VER="2.10"
+UTIL_LINUX_VER="2.31"
+
+set -e
+
+echo ''
+
+clean () {
+	rm -rf "$INSTALLPATH"
+	mkdir -p "$INSTALLPATH"
+} # clean
+
+missing_deps () {
+	echo "missing dependencies."
+	echo "http://www.oberhumer.com/opensource/lzo/download/lzo-${LZO_VER}.tar.gz"
+	echo "https://www.kernel.org/pub/linux/utils/util-linux/v${UTIL_LINUX_VER}/util-linux-${UTIL_LINUX_VER}.tar.xz"
+	echo "http://www.zlib.net/zlib-${ZLIB_VER}.tar.gz"
+	exit
+} # missing_deps
+
+check_deps () {
+	cd "$SRCPATH"
+
+	if ! echo 'c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072  lzo-2.10.tar.gz' | sha256sum --check --status ; then
+		missing_deps
+	fi
+
+	if ! echo 'f9be7cdcf4fc5c5064a226599acdda6bdf3d86c640152ba01ea642d91108dc8a  util-linux-2.31.tar.xz' | sha256sum --check --status ; then
+		missing_deps
+	fi
+
+	if ! echo 'c3e5e9fdd5004dcb542feda5ee4f0ff0744628baf8ed2dd5d66f8ca1197cb1a1  zlib-1.2.11.tar.gz' | sha256sum --check --status ; then
+		missing_deps
+	fi
+
+	cd "$CWD"
+} # check_deps
+
+build_zlib () {
+	cd "$SRCPATH"
+
+	rm -rf "zlib-${ZLIB_VER}/"
+	tar -xf "zlib-${ZLIB_VER}.tar.gz"
+
+	cd "zlib-${ZLIB_VER}"
+
+	CC="${CROSS_COMPILE}gcc" ./configure --static --prefix="${INSTALLPATH}"
+	make
+	make install
+
+	cd "$CWD"
+} # zlib
+
+build_lzo () {
+	cd "$SRCPATH"
+
+	rm -rf "lzo-${LZO_VER}"
+	tar -xf "lzo-${LZO_VER}.tar.gz"
+
+	cd "lzo-${LZO_VER}"
+
+	CC="${CROSS_COMPILE}gcc" ./configure --build=x86_64-linux --host=arm-linux --enable-static --prefix="${INSTALLPATH}"
+	make
+	make install
+
+	cd "$CWD"
+} # lzo
+
+build_util_linux () {
+	cd "$SRCPATH"
+
+	rm -rf "util-linux-${UTIL_LINUX_VER}"
+	tar -xf "util-linux-${UTIL_LINUX_VER}.tar.xz"
+
+	cd "util-linux-${UTIL_LINUX_VER}"
+
+	CC="${CROSS_COMPILE}gcc" ./configure --host=arm-linux --prefix="${INSTALLPATH}"
+	make libuuid.la
+
+	cd "$CWD"
+} # util-linux
+
+build_mtdutils () {
+	cd "${CWD}"
+	cd "mtd-utils"
+
+	./autogen.sh
+
+	if [ -e Makefile ] ; then
+		make clean
+	fi
+
+	CC="${CROSS_COMPILE}gcc" \
+	  CFLAGS="-I${INSTALLPATH}/include -I${INSTALLPATH}/include/lzo -static -static-libgcc" \
+	  LDFLAGS="-L${INSTALLPATH}/lib -L${SRCPATH}/util-linux-${UTIL_LINUX_VER} -Wl,-Bstatic" \
+	  ./configure --build=arm-linux --host=x86_64-linux --enable-static --without-xattr --prefix="${INSTALLPATH}"
+
+	make
+	make install
+
+	cd "$CWD"
+} # mtd-utils
+
+strip_bin () {
+	find "${INSTALLPATH}/sbin" -type f | grep -v "flash_eraseall" | xargs "${CROSS_COMPILE}strip" "--strip-all"
+}
+
+check_deps
+clean
+build_zlib
+build_lzo
+build_util_linux
+build_mtdutils
+strip_bin
